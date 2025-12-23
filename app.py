@@ -8,9 +8,6 @@ from langchain_core.prompts import PromptTemplate
 from gemini import create_model
 
 
-st.write("Secrets:", st.secrets)
-st.write("Has GOOGLE_API_KEY:", "GOOGLE_API_KEY" in st.secrets)
-st.write("Env has GOOGLE_API_KEY:", "GOOGLE_API_KEY" in os.environ)
 
 def goodreads_search_url(title: str, author: str = "") -> str:
     q = f"{title} {author}".strip()

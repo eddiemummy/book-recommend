@@ -1,10 +1,12 @@
 # ==== app.py ==============================================================
 import json
+from urllib.parse import quote_plus
 
 import streamlit as st
-from langchain_ollama import ChatOllama
 from langchain_core.prompts import PromptTemplate
-from urllib.parse import quote_plus
+
+from gemini import create_model
+
 
 def goodreads_search_url(title: str, author: str = "") -> str:
     q = f"{title} {author}".strip()
@@ -15,42 +17,47 @@ def goodreads_search_url(title: str, author: str = "") -> str:
 def normalize_title(s: str) -> str:
     return " ".join(str(s).strip().lower().split())
 
+
 def safe_json_loads(s: str):
     s = (s or "").strip()
-    # strip fenced code block
     if s.startswith("```"):
         s = s.strip().strip("`").strip()
-        # if starts with "json\n"
         if s.lower().startswith("json"):
             s = s.split("\n", 1)[-1].strip()
     return json.loads(s)
+
 
 def get_read_set() -> set[str]:
     if "read_set" not in st.session_state:
         st.session_state.read_set = set()
     return st.session_state.read_set
 
+
 def set_read_set(items: set[str]):
     st.session_state.read_set = items
+
 
 def replace_read_from_uploaded_text(content: str):
     lines = [l.strip() for l in (content or "").splitlines()]
     items = {l for l in lines if l}
     set_read_set(items)
 
+
 def append_read(title: str):
     title = (title or "").strip()
     if not title:
         return
     rs = get_read_set()
-    rs.add(title)  # ✅ "üstüne yazma" burada: her yeni kitap eklenir
+    rs.add(title)
     set_read_set(rs)
+
 
 def export_read_txt() -> str:
     rs = get_read_set()
     if not rs:
         return ""
     return "\n".join(sorted(rs)) + "\n"
+
 
 def filter_out_read(recs: list[dict], read_set: set[str]) -> list[dict]:
     read_norm = {normalize_title(x) for x in read_set}
@@ -76,6 +83,7 @@ def filter_out_read(recs: list[dict], read_set: set[str]) -> list[dict]:
 
     return out
 
+
 # -------------------------- UI -------------------------------------------
 st.set_page_config(page_title="Kitap Öneri Botu", layout="wide")
 st.title("📚 Kitap Öneri Botu")
@@ -98,15 +106,18 @@ st.markdown(
 """
 )
 
-
 col1, col2, col3 = st.columns([2, 2, 2])
 
 with col1:
-    uploaded = st.file_uploader("read.txt yükle (mevcut listeyi ÜZERİNE YAZAR)", type=["txt"], accept_multiple_files=False)
+    uploaded = st.file_uploader(
+        "Okuma listenizi yükleyin (.txt) — mevcut listeyi ÜZERİNE YAZAR",
+        type=["txt"],
+        accept_multiple_files=False,
+    )
     if uploaded is not None:
         content = uploaded.getvalue().decode("utf-8", errors="ignore")
-        replace_read_from_uploaded_text(content)  # ✅ overwrite
-        st.success(f"read.txt yüklendi. Toplam kitap: {len(get_read_set())}")
+        replace_read_from_uploaded_text(content)
+        st.success(f"Dosya yüklendi. Toplam kitap: {len(get_read_set())}")
         st.rerun()
 
 with col2:
@@ -126,9 +137,13 @@ with col3:
 
 st.divider()
 
-# LLM init
+# -------------------------- LLM init (Gemini) -----------------------------
 if "llm" not in st.session_state:
-    st.session_state.llm = ChatOllama(model="gpt-oss:120b-cloud")
+    try:
+        st.session_state.llm = create_model(temperature=0.0)
+    except Exception as e:
+        st.error(str(e))
+        st.stop()
 
 prompt = PromptTemplate.from_template(
     """
@@ -211,10 +226,7 @@ if run_button and question.strip():
             if not isinstance(recs, list):
                 raise ValueError("recommendations list değil")
 
-            # güvenlik: read listesinden filtrele + dedupe
             recs = filter_out_read(recs, read_set)
-
-            # 10'a kırp
             st.session_state.last_recs = recs[:10]
 
         except Exception:
@@ -250,6 +262,7 @@ if st.session_state.last_recs:
                 st.markdown(f"— _{reason}_")
             else:
                 st.markdown("— _Neden önerildi: (LLM açıklama vermedi)_")
+
             url = goodreads_search_url(title, author)
             st.markdown(f"[🔎 Goodreads'te ara]({url})")
 
@@ -259,12 +272,8 @@ if st.session_state.last_recs:
             else:
                 if st.button("✅ Okudum", key=f"read_{idx}"):
                     append_read(title)
-
-                    # listeden düşür
                     st.session_state.last_recs = [
                         x for x in st.session_state.last_recs
                         if normalize_title(x.get("title", "")) != normalize_title(title)
                     ]
                     st.rerun()
-
-# ======================================================================

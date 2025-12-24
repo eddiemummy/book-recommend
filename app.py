@@ -1,18 +1,24 @@
 # ==== app.py ==============================================================
 import json
-import hashlib
 from urllib.parse import quote_plus
+import os
+import hashlib
+
 import streamlit as st
 from langchain_core.prompts import PromptTemplate
+
 from gemini import create_model
 
-# -------------------------- helpers --------------------------------------
+
 def goodreads_search_url(title: str, author: str = "") -> str:
     q = f"{title} {author}".strip()
     return f"https://www.goodreads.com/search?q={quote_plus(q)}"
 
+
+# -------------------------- helpers --------------------------------------
 def normalize_title(s: str) -> str:
     return " ".join(str(s).strip().lower().split())
+
 
 def safe_json_loads(s: str):
     s = (s or "").strip()
@@ -22,18 +28,22 @@ def safe_json_loads(s: str):
             s = s.split("\n", 1)[-1].strip()
     return json.loads(s)
 
+
 def get_read_set() -> set[str]:
     if "read_set" not in st.session_state:
         st.session_state.read_set = set()
     return st.session_state.read_set
 
+
 def set_read_set(items: set[str]):
     st.session_state.read_set = items
+
 
 def replace_read_from_uploaded_text(content: str):
     lines = [l.strip() for l in (content or "").splitlines()]
     items = {l for l in lines if l}
     set_read_set(items)
+
 
 def append_read(title: str):
     title = (title or "").strip()
@@ -43,11 +53,13 @@ def append_read(title: str):
     rs.add(title)
     set_read_set(rs)
 
+
 def export_read_txt() -> str:
     rs = get_read_set()
     if not rs:
         return ""
     return "\n".join(sorted(rs)) + "\n"
+
 
 def filter_out_read(recs: list[dict], read_set: set[str]) -> list[dict]:
     read_norm = {normalize_title(x) for x in read_set}
@@ -73,16 +85,19 @@ def filter_out_read(recs: list[dict], read_set: set[str]) -> list[dict]:
 
     return out
 
-def file_fingerprint(uploaded) -> str:
-    b = uploaded.getvalue()
-    h = hashlib.sha256(b).hexdigest()
-    return f"{uploaded.name}:{uploaded.size}:{h}"
+
+def file_sig(file_bytes: bytes) -> str:
+    return hashlib.sha256(file_bytes).hexdigest()
+
 
 # -------------------------- UI -------------------------------------------
 st.set_page_config(page_title="Kitap Öneri Botu", layout="wide")
 st.title("📚 Kitap Öneri Botu")
-st.caption("Query yaz → 10 öneri gelir → Okudum → read.txt güncellenir → Download ile indirip sonra tekrar upload edebilirsin.")
+st.caption(
+    "Query yaz → 10 öneri gelir → Okudum → read.txt güncellenir → Download ile indirip sonra tekrar upload edebilirsin."
+)
 
+# --- Import/Export read.txt (overwrite semantics) ---
 st.divider()
 st.subheader("📦 read.txt yükle / indir")
 st.markdown(
@@ -99,15 +114,6 @@ st.markdown(
 """
 )
 
-# Upload sonrası işlemlere DEVAM etmek için:
-# - st.rerun() KULLANMIYORUZ (upload zaten rerun tetikler)
-# - st.stop() KULLANMIYORUZ (UI aşağıda görünmeye devam eder)
-# - aynı dosyayı her rerun'da tekrar işlemekten kaçınmak için fingerprint kullanıyoruz
-if "last_uploaded_fp" not in st.session_state:
-    st.session_state.last_uploaded_fp = None
-if "upload_notice" not in st.session_state:
-    st.session_state.upload_notice = ""
-
 col1, col2, col3 = st.columns([2, 2, 2])
 
 with col1:
@@ -118,16 +124,21 @@ with col1:
         key="read_uploader",
     )
 
-    if uploaded is not None:
-        fp = file_fingerprint(uploaded)
-        if st.session_state.last_uploaded_fp != fp:
-            content = uploaded.getvalue().decode("utf-8", errors="ignore")
-            replace_read_from_uploaded_text(content)
-            st.session_state.last_uploaded_fp = fp
-            st.session_state.upload_notice = f"Dosya yüklendi. Toplam kitap: {len(get_read_set())}"
+    # Upload tekrar tekrar rerun döngüsüne girmesin diye "son işlenen dosya" imzasını tutuyoruz
+    if "last_uploaded_sig" not in st.session_state:
+        st.session_state.last_uploaded_sig = None
 
-    if st.session_state.upload_notice:
-        st.success(st.session_state.upload_notice)
+    if uploaded is not None:
+        b = uploaded.getvalue()
+        sig = file_sig(b)
+
+        # SADECE dosya değiştiyse işle
+        if sig != st.session_state.last_uploaded_sig:
+            content = b.decode("utf-8", errors="ignore")
+            replace_read_from_uploaded_text(content)
+            st.session_state.last_uploaded_sig = sig
+            st.success(f"Dosya yüklendi. Toplam kitap: {len(get_read_set())}")
+            st.rerun()  # UI anında güncellensin diye (istersen kaldırabilirsin)
 
 with col2:
     if st.button("📄 read listesini göster"):
@@ -214,8 +225,8 @@ with colA:
 with colB:
     if st.button("🧹 read listesini temizle"):
         set_read_set(set())
-        st.session_state.last_uploaded_fp = None
-        st.session_state.upload_notice = ""
+        # last_uploaded_sig'i de sıfırlamak istersen:
+        # st.session_state.last_uploaded_sig = None
         st.success("Okunanlar listesi temizlendi.")
         st.rerun()
 
@@ -284,7 +295,9 @@ if st.session_state.last_recs:
                 if st.button("✅ Okudum", key=f"read_{idx}"):
                     append_read(title)
                     st.session_state.last_recs = [
-                        x for x in st.session_state.last_recs
-                        if normalize_title(x.get("title", "")) != normalize_title(title)
+                        x
+                        for x in st.session_state.last_recs
+                        if normalize_title(x.get("title", ""))
+                        != normalize_title(title)
                     ]
                     st.rerun()

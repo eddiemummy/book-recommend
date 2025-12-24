@@ -1,23 +1,18 @@
 # ==== app.py ==============================================================
 import json
+import hashlib
 from urllib.parse import quote_plus
-import os
 import streamlit as st
 from langchain_core.prompts import PromptTemplate
-
 from gemini import create_model
 
-
-
+# -------------------------- helpers --------------------------------------
 def goodreads_search_url(title: str, author: str = "") -> str:
     q = f"{title} {author}".strip()
     return f"https://www.goodreads.com/search?q={quote_plus(q)}"
 
-
-# -------------------------- helpers --------------------------------------
 def normalize_title(s: str) -> str:
     return " ".join(str(s).strip().lower().split())
-
 
 def safe_json_loads(s: str):
     s = (s or "").strip()
@@ -27,22 +22,18 @@ def safe_json_loads(s: str):
             s = s.split("\n", 1)[-1].strip()
     return json.loads(s)
 
-
 def get_read_set() -> set[str]:
     if "read_set" not in st.session_state:
         st.session_state.read_set = set()
     return st.session_state.read_set
 
-
 def set_read_set(items: set[str]):
     st.session_state.read_set = items
-
 
 def replace_read_from_uploaded_text(content: str):
     lines = [l.strip() for l in (content or "").splitlines()]
     items = {l for l in lines if l}
     set_read_set(items)
-
 
 def append_read(title: str):
     title = (title or "").strip()
@@ -52,13 +43,11 @@ def append_read(title: str):
     rs.add(title)
     set_read_set(rs)
 
-
 def export_read_txt() -> str:
     rs = get_read_set()
     if not rs:
         return ""
     return "\n".join(sorted(rs)) + "\n"
-
 
 def filter_out_read(recs: list[dict], read_set: set[str]) -> list[dict]:
     read_norm = {normalize_title(x) for x in read_set}
@@ -84,6 +73,15 @@ def filter_out_read(recs: list[dict], read_set: set[str]) -> list[dict]:
 
     return out
 
+def file_fingerprint(uploaded) -> str:
+    """
+    Upload edilen dosyayı aynı run içinde tekrar tekrar işlememek için
+    stabil bir parmak izi üretir.
+    """
+    b = uploaded.getvalue()
+    h = hashlib.sha256(b).hexdigest()
+    return f"{uploaded.name}:{uploaded.size}:{h}"
+
 
 # -------------------------- UI -------------------------------------------
 st.set_page_config(page_title="Kitap Öneri Botu", layout="wide")
@@ -107,6 +105,13 @@ st.markdown(
 """
 )
 
+# Upload işleminde websocket log hatasını azaltmak için:
+# - st.rerun() KULLANMIYORUZ (upload zaten rerun tetikler)
+# - Aynı dosyayı tekrar tekrar işlememek için fingerprint kontrolü yapıyoruz
+# - İş bitince st.stop() ile o run'ı net kapatıyoruz
+if "last_uploaded_fp" not in st.session_state:
+    st.session_state.last_uploaded_fp = None
+
 col1, col2, col3 = st.columns([2, 2, 2])
 
 with col1:
@@ -115,11 +120,19 @@ with col1:
         type=["txt"],
         accept_multiple_files=False,
     )
+
     if uploaded is not None:
-        content = uploaded.getvalue().decode("utf-8", errors="ignore")
-        replace_read_from_uploaded_text(content)
-        st.success(f"Dosya yüklendi. Toplam kitap: {len(get_read_set())}")
-        st.rerun()
+        fp = file_fingerprint(uploaded)
+
+        # Aynı dosya her rerun'da tekrar yüklenmiş gibi görünmesin diye:
+        if st.session_state.last_uploaded_fp != fp:
+            content = uploaded.getvalue().decode("utf-8", errors="ignore")
+            replace_read_from_uploaded_text(content)
+            st.session_state.last_uploaded_fp = fp
+            st.success(f"Dosya yüklendi. Toplam kitap: {len(get_read_set())}")
+
+        # Upload sonrası sayfanın geri kalanında tekrar iş akmasın:
+        st.stop()
 
 with col2:
     if st.button("📄 read listesini göster"):

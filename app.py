@@ -74,21 +74,15 @@ def filter_out_read(recs: list[dict], read_set: set[str]) -> list[dict]:
     return out
 
 def file_fingerprint(uploaded) -> str:
-    """
-    Upload edilen dosyayı aynı run içinde tekrar tekrar işlememek için
-    stabil bir parmak izi üretir.
-    """
     b = uploaded.getvalue()
     h = hashlib.sha256(b).hexdigest()
     return f"{uploaded.name}:{uploaded.size}:{h}"
-
 
 # -------------------------- UI -------------------------------------------
 st.set_page_config(page_title="Kitap Öneri Botu", layout="wide")
 st.title("📚 Kitap Öneri Botu")
 st.caption("Query yaz → 10 öneri gelir → Okudum → read.txt güncellenir → Download ile indirip sonra tekrar upload edebilirsin.")
 
-# --- Import/Export read.txt (overwrite semantics) ---
 st.divider()
 st.subheader("📦 read.txt yükle / indir")
 st.markdown(
@@ -105,12 +99,14 @@ st.markdown(
 """
 )
 
-# Upload işleminde websocket log hatasını azaltmak için:
+# Upload sonrası işlemlere DEVAM etmek için:
 # - st.rerun() KULLANMIYORUZ (upload zaten rerun tetikler)
-# - Aynı dosyayı tekrar tekrar işlememek için fingerprint kontrolü yapıyoruz
-# - İş bitince st.stop() ile o run'ı net kapatıyoruz
+# - st.stop() KULLANMIYORUZ (UI aşağıda görünmeye devam eder)
+# - aynı dosyayı her rerun'da tekrar işlemekten kaçınmak için fingerprint kullanıyoruz
 if "last_uploaded_fp" not in st.session_state:
     st.session_state.last_uploaded_fp = None
+if "upload_notice" not in st.session_state:
+    st.session_state.upload_notice = ""
 
 col1, col2, col3 = st.columns([2, 2, 2])
 
@@ -119,20 +115,19 @@ with col1:
         "Okuma listenizi yükleyin (.txt) — mevcut listeyi ÜZERİNE YAZAR",
         type=["txt"],
         accept_multiple_files=False,
+        key="read_uploader",
     )
 
     if uploaded is not None:
         fp = file_fingerprint(uploaded)
-
-        # Aynı dosya her rerun'da tekrar yüklenmiş gibi görünmesin diye:
         if st.session_state.last_uploaded_fp != fp:
             content = uploaded.getvalue().decode("utf-8", errors="ignore")
             replace_read_from_uploaded_text(content)
             st.session_state.last_uploaded_fp = fp
-            st.success(f"Dosya yüklendi. Toplam kitap: {len(get_read_set())}")
+            st.session_state.upload_notice = f"Dosya yüklendi. Toplam kitap: {len(get_read_set())}"
 
-        # Upload sonrası sayfanın geri kalanında tekrar iş akmasın:
-        st.stop()
+    if st.session_state.upload_notice:
+        st.success(st.session_state.upload_notice)
 
 with col2:
     if st.button("📄 read listesini göster"):
@@ -219,6 +214,8 @@ with colA:
 with colB:
     if st.button("🧹 read listesini temizle"):
         set_read_set(set())
+        st.session_state.last_uploaded_fp = None
+        st.session_state.upload_notice = ""
         st.success("Okunanlar listesi temizlendi.")
         st.rerun()
 
